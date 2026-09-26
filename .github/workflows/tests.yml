@@ -28,7 +28,7 @@ jobs:
           cleanup() { docker rm -f ai-gateway-ci >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:18200/healthz >/dev/null; then break; fi
+            if curl -fsS http://localhost:18200/health >/dev/null; then break; fi
             sleep 1
           done
           curl -fsS http://localhost:18200/healthz >/dev/null
