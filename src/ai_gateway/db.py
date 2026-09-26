@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 SCHEMA = """
@@ -40,7 +41,7 @@ class Conversation:
 
 class SessionStore:
     def __init__(self, dsn: str, min_size: int = 1, max_size: int = 5) -> None:
-        self.pool = AsyncConnectionPool(dsn, min_size=min_size, max_size=max_size, open=False)
+        self.pool = AsyncConnectionPool(dsn, min_size=min_size, max_size=max_size, open=False, kwargs={"row_factory": dict_row})
 
     async def open(self) -> None:
         await self.pool.open()
