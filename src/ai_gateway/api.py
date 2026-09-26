@@ -69,7 +69,7 @@ async def list_conversations(request: Request, limit: int = 50) -> list[Conversa
         ) for row in rows
     ]
 
-@app.post("/v1/chat/completions", tags=["llm"])
+@app.post("/v1/chat/completions", tags=["internal"])
 async def chat_completions(body: ChatCompletionRequest, request: Request) -> dict:
     tenant, user = authenticate(request)
     conversation_id = body.conversation_id
