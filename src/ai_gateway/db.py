@@ -42,17 +42,27 @@ class Conversation:
 class SessionStore:
     def __init__(self, dsn: str, min_size: int = 1, max_size: int = 5) -> None:
         self.pool = AsyncConnectionPool(dsn, min_size=min_size, max_size=max_size, open=False, kwargs={"row_factory": dict_row})
+        self._opened = False
 
     async def open(self) -> None:
+        if self._opened:
+            return
         await self.pool.open()
+        self._opened = True
         async with self.pool.connection() as connection:
             await connection.execute(SCHEMA)
             await connection.commit()
 
     async def close(self) -> None:
-        await self.pool.close()
+        if self._opened:
+            await self.pool.close()
+            self._opened = False
+
+    async def _ensure_open(self) -> None:
+        await self.open()
 
     async def create_conversation(self, tenant_id: str, user_id: str, title: str | None) -> Conversation:
+        await self._ensure_open()
         async with self.pool.connection() as connection:
             result = await connection.execute(
                 """INSERT INTO ai_conversations (id, tenant_id, user_id, title)
@@ -65,7 +75,11 @@ class SessionStore:
         assert row is not None
         return Conversation(**row)
 
+    async def _ensure_open(self) -> None:
+        await self.open()
+
     async def list_conversations(self, tenant_id: str, user_id: str, limit: int) -> list[Conversation]:
+        await self._ensure_open()
         async with self.pool.connection() as connection:
             result = await connection.execute(
                 """SELECT id, title, created_at, updated_at FROM ai_conversations
@@ -76,7 +90,11 @@ class SessionStore:
             rows = await result.fetchall()
         return [Conversation(**row) for row in rows]
 
+    async def _ensure_open(self) -> None:
+        await self.open()
+
     async def conversation_exists(self, conversation_id: str, tenant_id: str, user_id: str) -> bool:
+        await self._ensure_open()
         async with self.pool.connection() as connection:
             result = await connection.execute(
                 "SELECT 1 FROM ai_conversations WHERE id = %s AND tenant_id = %s AND user_id = %s",
@@ -84,7 +102,11 @@ class SessionStore:
             )
             return await result.fetchone() is not None
 
+    async def _ensure_open(self) -> None:
+        await self.open()
+
     async def get_history(self, conversation_id: str, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
+        await self._ensure_open()
         async with self.pool.connection() as connection:
             result = await connection.execute(
                 """SELECT m.role, m.content FROM ai_messages AS m
@@ -95,9 +117,13 @@ class SessionStore:
             )
             return [dict(row) for row in await result.fetchall()]
 
+    async def _ensure_open(self) -> None:
+        await self.open()
+
     async def append_message(
         self, conversation_id: str, tenant_id: str, user_id: str, role: str, content: str
     ) -> None:
+        await self._ensure_open()
         async with self.pool.connection() as connection:
             result = await connection.execute(
                 """INSERT INTO ai_messages (id, conversation_id, tenant_id, user_id, role, content)
