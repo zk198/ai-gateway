@@ -1,4 +1,5 @@
 name: tests
+# AI gateway application and MCP smoke validation
 
 on:
   push:
