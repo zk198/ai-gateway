@@ -31,7 +31,7 @@ jobs:
             if curl -fsS http://localhost:18200/health >/dev/null; then break; fi
             sleep 1
           done
-          curl -fsS http://localhost:18200/healthz >/dev/null
+          curl -fsS http://localhost:18200/health >/dev/null
           status=$(curl -sS -o /tmp/mcp-smoke.out -w '%{http_code}' \
             -H 'Accept: application/json, text/event-stream' \
             http://localhost:18200/mcp/)
