@@ -10,7 +10,5 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      agent-core:
-        condition: service_started
     ports:
       - "8200:8200"
