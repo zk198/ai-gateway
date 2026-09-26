@@ -75,9 +75,6 @@ class SessionStore:
         assert row is not None
         return Conversation(**row)
 
-    async def _ensure_open(self) -> None:
-        await self.open()
-
     async def list_conversations(self, tenant_id: str, user_id: str, limit: int) -> list[Conversation]:
         await self._ensure_open()
         async with self.pool.connection() as connection:
@@ -90,9 +87,6 @@ class SessionStore:
             rows = await result.fetchall()
         return [Conversation(**row) for row in rows]
 
-    async def _ensure_open(self) -> None:
-        await self.open()
-
     async def conversation_exists(self, conversation_id: str, tenant_id: str, user_id: str) -> bool:
         await self._ensure_open()
         async with self.pool.connection() as connection:
@@ -101,9 +95,6 @@ class SessionStore:
                 (conversation_id, tenant_id, user_id),
             )
             return await result.fetchone() is not None
-
-    async def _ensure_open(self) -> None:
-        await self.open()
 
     async def get_history(self, conversation_id: str, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
         await self._ensure_open()
@@ -116,9 +107,6 @@ class SessionStore:
                 (conversation_id, tenant_id, user_id),
             )
             return [dict(row) for row in await result.fetchall()]
-
-    async def _ensure_open(self) -> None:
-        await self.open()
 
     async def append_message(
         self, conversation_id: str, tenant_id: str, user_id: str, role: str, content: str
