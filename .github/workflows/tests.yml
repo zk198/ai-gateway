@@ -15,16 +15,16 @@ jobs:
           enable-cache: true
       - run: uv sync --extra test
       - run: uv run pytest
-      - run: docker build --progress=plain -t rag-gateway:ci .
+      - run: docker build --progress=plain -t ai-gateway:ci .
 
       - name: Smoke test Docker HTTP endpoints
         run: |
-          docker run -d --rm --name rag-gateway-ci -p 18200:8200 \
+          docker run -d --rm --name ai-gateway-ci -p 18200:8200 \
             -e RAG_RETRIEVAL_URL=http://127.0.0.1:8100 \
             -e RAG_INGESTION_URL=http://127.0.0.1:8100 \
             -e RAG_JWT_SECRET=e2e-ci-only-secret \
-            rag-gateway:ci
-          cleanup() { docker rm -f rag-gateway-ci >/dev/null 2>&1 || true; }
+            ai-gateway:ci
+          cleanup() { docker rm -f ai-gateway-ci >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           for _ in $(seq 1 30); do
             if curl -fsS http://localhost:18200/healthz >/dev/null; then break; fi
