@@ -105,3 +105,29 @@ def test_chat_completions_persists_history_and_calls_agent(monkeypatch):
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "world"},
     ]
+
+    async def second_chat(messages, model):
+        assert messages == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+            {"role": "user", "content": "again"},
+        ]
+        return {"content": "second", "iterations": 1, "tool_calls": 0}
+
+    monkeypatch.setattr(gateway_api.agent_client, "chat", second_chat)
+    response = TestClient(gateway_api.app).post(
+        "/v1/chat/completions",
+        json={
+            "conversation_id": "c1",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+                {"role": "user", "content": "again"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert store.messages[-2:] == [
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "content": "second"},
+    ]
