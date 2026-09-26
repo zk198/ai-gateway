@@ -4,9 +4,9 @@ import httpx
 from ai_gateway import api
 
 
-def test_healthz():
+def test_health():
     client = TestClient(api.app)
-    response = client.get("/healthz")
+    response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
