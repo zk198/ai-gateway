@@ -79,8 +79,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> dic
         raise HTTPException(404, "conversation not found")
 
     history = await session_store.get_history(conversation_id, tenant, user)
-    new_messages = [message.model_dump() for message in body.messages]
-    messages = history + new_messages
+    incoming = [message.model_dump() for message in body.messages]
+
+    if history and incoming[: len(history)] == history:
+        new_messages = incoming[len(history) :]
+        messages = incoming
+    elif conversation_id and all(message["role"] == "user" for message in incoming):
+        new_messages = incoming
+        messages = history + incoming
+    elif history:
+        raise HTTPException(409, "messages must extend the stored conversation history")
+    else:
+        new_messages = incoming
+        messages = incoming
+
+    if not new_messages:
+        raise HTTPException(400, "no new messages supplied")
 
     if body.stream:
         raise HTTPException(400, "streaming is not yet enabled at the gateway boundary")
