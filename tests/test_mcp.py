@@ -6,10 +6,10 @@ import jwt
 import pytest
 from starlette.requests import Request
 
-from rag_gateway import api
-from rag_gateway.api import app
-from rag_gateway.auth import authenticate
-from rag_gateway.mcp import mcp, mcp_app
+from ai_gateway import api
+from ai_gateway.api import app
+from ai_gateway.auth import authenticate
+from ai_gateway.mcp import mcp, mcp_app
 
 
 def request_with_token(token: str):
@@ -204,15 +204,15 @@ async def test_mcp_invalid_jwt_or_missing_identity_claims_never_reach_downstream
 
 
 def test_single_jwt_verifier_is_shared_by_rest_and_generated_mcp_tools():
-    import rag_gateway.api as gateway_api
-    import rag_gateway.auth as gateway_auth
+    import ai_gateway.api as gateway_api
+    import ai_gateway.auth as gateway_auth
 
     assert gateway_api.authenticate is gateway_auth.authenticate
 
 
 def test_mcp_entrypoint_is_http_and_generated_tools_use_streamable_http():
     source = __import__("inspect").getsource(
-        __import__("rag_gateway.mcp", fromlist=["mcp"])
+        __import__("ai_gateway.mcp", fromlist=["mcp"])
     )
     assert 'mcp.run(transport="http"' in source
     assert mcp.http_app(transport="streamable-http", stateless_http=True) is not None
