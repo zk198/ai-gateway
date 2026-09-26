@@ -11,4 +11,4 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8200:8200"
+      - "${AI_GATEWAY_PORT:-8200}:8200"
