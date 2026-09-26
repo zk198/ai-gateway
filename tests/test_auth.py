@@ -3,7 +3,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from rag_gateway.auth import authenticate
+from ai_gateway.auth import authenticate
 
 
 def request_with_token(token):
