@@ -32,10 +32,6 @@ app.add_middleware(
     CORSMiddleware, allow_origins=UI_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
 
-@app.on_event("startup")
-async def startup() -> None:
-    await session_store.open()
-
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await session_store.close()
