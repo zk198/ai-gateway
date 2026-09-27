@@ -220,6 +220,7 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
 
     async def events():
         answer_parts: list[str] = []
+        stream_started = time.perf_counter()
         try:
             async for event, data in agent_client.stream_answer(messages, body.model):
                 payload = json.loads(data)
@@ -233,9 +234,10 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
                     await session_store.append_message(conversation_id, tenant, user, "assistant", answer_text)
                     payload["conversation_id"] = str(conversation_id)
+                    logger.info("gateway_stream_stage request_id=%s stage=agent agent_ms=%.1f", request_id(), elapsed_ms(stream_started))
                     yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        except Exception:
-            logger.exception("grounded_answer_stream_failed")
+        except Exception as exc:
+            logger.exception("grounded_answer_stream_failed request_id=%s stage=agent error=%s", request_id(), type(exc).__name__)
             yield f"event: error\ndata: {json.dumps({'detail': 'grounded answer dependency failed'})}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
