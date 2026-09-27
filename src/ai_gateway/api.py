@@ -244,8 +244,11 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
 @app.post("/search", operation_id="search_knowledge", tags=["llm"])
 async def search(request: SearchRequest, http_request: Request) -> list[dict]:
     tenant, user = authenticate(http_request)
+    started = time.perf_counter()
     try:
-        return await service.search(request.query, request.limit, tenant, user)
+        result = await service.search(request.query, request.limit, tenant, user)
+        logger.info("gateway_stage request_id=%s stage=retrieval retrieval_ms=%.1f", request_id(), elapsed_ms(started))
+        return result
     except Exception as exc:
         raise downstream_error(exc) from exc
 
