@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from .agent_client import AgentClient
 from .auth import authenticate
 from .db import SessionStore
-from .models import ChatCompletionRequest, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
+from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
 from .service import RAGService
 
 settings = GatewaySettings(
@@ -118,6 +119,93 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> dic
         "conversation_id": conversation_id,
         "usage": {"iterations": result.get("iterations", 0), "tool_calls": result.get("tool_calls", 0)},
     }
+
+def _conversation_messages(request: AnswerRequest, history: list[dict]) -> tuple[str, list[dict], list[dict]]:
+    incoming = [item.model_dump() for item in request.messages] if request.messages else []
+    if not incoming and request.question:
+        incoming = [{"role": "user", "content": request.question}]
+    if not incoming:
+        raise HTTPException(status_code=422, detail="question or messages is required")
+    if history and incoming[: len(history)] == history:
+        new_messages = incoming[len(history) :]
+        messages = incoming
+    elif all(message["role"] == "user" for message in incoming):
+        new_messages = incoming
+        messages = history + incoming
+    elif history:
+        raise HTTPException(status_code=409, detail="messages must extend the stored conversation history")
+    else:
+        new_messages = incoming
+        messages = incoming
+    if not new_messages:
+        raise HTTPException(status_code=400, detail="no new messages supplied")
+    return conversation_id, messages, new_messages
+
+
+@app.post("/api/v1/answer", response_model=AnswerResponse)
+async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
+    tenant, user = authenticate(request)
+    conversation_id = body.conversation_id
+    if conversation_id is None:
+        conversation_id = (await session_store.create_conversation(tenant, user, None)).id
+    elif not await session_store.conversation_exists(conversation_id, tenant, user):
+        raise HTTPException(status_code=404, detail="conversation not found")
+    history = await session_store.get_history(conversation_id, tenant, user)
+    _, messages, new_messages = _conversation_messages(body, history)
+    try:
+        result = await agent_client.answer(messages, body.model)
+    except Exception as exc:
+        raise downstream_error(exc) from exc
+    for message in new_messages:
+        await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
+    await session_store.append_message(conversation_id, tenant, user, "assistant", str(result.get("answer", "")))
+    return AnswerResponse(
+        answer=str(result.get("answer", "")),
+        citations=[Citation(**item) for item in result.get("citations", [])],
+        iterations=int(result.get("iterations", 0)),
+        tool_calls=int(result.get("tool_calls", 0)),
+    )
+
+
+@app.post("/api/v1/answer/stream")
+async def answer_stream(body: AnswerRequest, request: Request) -> StreamingResponse:
+    tenant, user = authenticate(request)
+    conversation_id = body.conversation_id
+    if conversation_id is None:
+        conversation_id = (await session_store.create_conversation(tenant, user, None)).id
+    elif not await session_store.conversation_exists(conversation_id, tenant, user):
+        raise HTTPException(status_code=404, detail="conversation not found")
+    history = await session_store.get_history(conversation_id, tenant, user)
+    _, messages, new_messages = _conversation_messages(body, history)
+
+    async def events():
+        answer_parts: list[str] = []
+        citations: list[dict] = []
+        iterations = 0
+        tool_calls = 0
+        try:
+            for event, data in agent_client.stream_answer(messages, body.model):
+                payload = json.loads(data)
+                if event == "delta":
+                    content = str(payload.get("content", ""))
+                    answer_parts.append(content)
+                    yield f"event: delta\\ndata: {json.dumps({'content': content}, ensure_ascii=False)}\\n\\n"
+                elif event == "done":
+                    citations = payload.get("citations", [])
+                    iterations = int(payload.get("iterations", 0))
+                    tool_calls = int(payload.get("tool_calls", 0))
+                    answer_text = "".join(answer_parts)
+                    for message in new_messages:
+                        await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
+                    await session_store.append_message(conversation_id, tenant, user, "assistant", answer_text)
+                    payload["conversation_id"] = conversation_id
+                    yield f"event: done\\ndata: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
+        except Exception:
+            logger.exception("grounded_answer_stream_failed")
+            yield f"event: error\\ndata: {json.dumps({'detail': 'grounded answer dependency failed'})}\\n\\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 
 @app.post("/search", operation_id="search_knowledge", tags=["llm"])
 async def search(request: SearchRequest, http_request: Request) -> list[dict]:
