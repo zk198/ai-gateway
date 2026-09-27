@@ -17,6 +17,7 @@ from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citati
 from .service import RAGService
 from .observability import elapsed_ms, incoming_request_id, request_id, reset_request_id, set_request_id
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 settings = GatewaySettings(
