@@ -45,6 +45,7 @@ class AgentClient:
                     json={"messages": messages, "model": model},
                 ) as response:
                     response.raise_for_status()
+                    event = "message"
                     async for line in response.aiter_lines():
                         if line.startswith("event: "):
                             event = line[7:]
