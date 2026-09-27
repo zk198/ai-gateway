@@ -139,7 +139,7 @@ def _conversation_messages(request: AnswerRequest, history: list[dict]) -> tuple
         messages = incoming
     if not new_messages:
         raise HTTPException(status_code=400, detail="no new messages supplied")
-    return conversation_id, messages, new_messages
+    return messages, new_messages
 
 
 @app.post("/api/v1/answer", response_model=AnswerResponse)
@@ -151,7 +151,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
     elif not await session_store.conversation_exists(conversation_id, tenant, user):
         raise HTTPException(status_code=404, detail="conversation not found")
     history = await session_store.get_history(conversation_id, tenant, user)
-    _, messages, new_messages = _conversation_messages(body, history)
+    messages, new_messages = _conversation_messages(body, history)
     try:
         result = await agent_client.answer(messages, body.model)
     except Exception as exc:
@@ -184,7 +184,7 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
         iterations = 0
         tool_calls = 0
         try:
-            for event, data in agent_client.stream_answer(messages, body.model):
+            async for event, data in agent_client.stream_answer(messages, body.model):
                 payload = json.loads(data)
                 if event == "delta":
                     content = str(payload.get("content", ""))
