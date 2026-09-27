@@ -120,7 +120,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> dic
         "usage": {"iterations": result.get("iterations", 0), "tool_calls": result.get("tool_calls", 0)},
     }
 
-def _conversation_messages(request: AnswerRequest, history: list[dict]) -> tuple[str, list[dict], list[dict]]:
+def _conversation_messages(request: AnswerRequest, history: list[dict]) -> tuple[list[dict], list[dict]]:
     incoming = [item.model_dump() for item in request.messages] if request.messages else []
     if not incoming and request.question:
         incoming = [{"role": "user", "content": request.question}]
@@ -180,9 +180,6 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
 
     async def events():
         answer_parts: list[str] = []
-        citations: list[dict] = []
-        iterations = 0
-        tool_calls = 0
         try:
             async for event, data in agent_client.stream_answer(messages, body.model):
                 payload = json.loads(data)
@@ -191,9 +188,6 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                     answer_parts.append(content)
                     yield f"event: delta\\ndata: {json.dumps({'content': content}, ensure_ascii=False)}\\n\\n"
                 elif event == "done":
-                    citations = payload.get("citations", [])
-                    iterations = int(payload.get("iterations", 0))
-                    tool_calls = int(payload.get("tool_calls", 0))
                     answer_text = "".join(answer_parts)
                     for message in new_messages:
                         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
