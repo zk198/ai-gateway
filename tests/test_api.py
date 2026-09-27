@@ -238,8 +238,6 @@ def test_grounded_answer_continues_stored_conversation(monkeypatch):
 
 
 def test_grounded_answer_surfaces_downstream_failure(monkeypatch):
-    from fastapi import HTTPException
-
     monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
 
     class FakeStore:
