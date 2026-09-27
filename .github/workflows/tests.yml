@@ -57,3 +57,5 @@ PY
             --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
             http://localhost:18200/mcp/)
           test "$status" = 200 || { echo "authenticated MCP initialize failed: $status"; cat /tmp/mcp-init.out; exit 1; }
+
+# CI diagnostic: force a PR synchronize event without changing workflow behavior.
