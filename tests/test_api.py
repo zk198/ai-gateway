@@ -296,10 +296,11 @@ def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
 
     response = TestClient(api.app).post("/api/v1/answer/stream", json={"question": "What?"})
     assert response.status_code == 200
-    assert "event: delta" in response.text
+    assert "event: delta\ndata:" in response.text
     assert "Hello " in response.text
-    assert "event: done" in response.text
+    assert "event: done\ndata:" in response.text
     assert '"conversation_id": "c1"' in response.text
+    assert '"citations": [{"id": "S1", "chunk_id": "c1", "source_name": "mailbox", "text": "Evidence"}]' in response.text
     assert store.messages == [
         {"role": "user", "content": "What?"},
         {"role": "assistant", "content": "Hello world."},

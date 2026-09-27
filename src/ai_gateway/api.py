@@ -190,17 +190,17 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                 if event == "delta":
                     content = str(payload.get("content", ""))
                     answer_parts.append(content)
-                    yield f"event: delta\\ndata: {json.dumps({'content': content}, ensure_ascii=False)}\\n\\n"
+                    yield f"event: delta\ndata: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
                 elif event == "done":
                     answer_text = "".join(answer_parts)
                     for message in new_messages:
                         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
                     await session_store.append_message(conversation_id, tenant, user, "assistant", answer_text)
                     payload["conversation_id"] = conversation_id
-                    yield f"event: done\\ndata: {json.dumps(payload, ensure_ascii=False)}\\n\\n"
+                    yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception:
             logger.exception("grounded_answer_stream_failed")
-            yield f"event: error\\ndata: {json.dumps({'detail': 'grounded answer dependency failed'})}\\n\\n"
+            yield f"event: error\ndata: {json.dumps({'detail': 'grounded answer dependency failed'})}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
