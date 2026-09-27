@@ -15,6 +15,7 @@ from .auth import authenticate
 from .db import SessionStore
 from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
 from .service import RAGService
+from .observability import elapsed_ms, incoming_request_id, request_id, reset_request_id, set_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,31 @@ service = RAGService(settings)
 agent_client = AgentClient(settings.agent_url, settings.agent_timeout_seconds)
 session_store = SessionStore(settings.postgres_dsn)
 app = FastAPI(title="AI Gateway", version="0.3.0")
+MAX_REQUEST_BYTES = int(os.getenv("AI_GATEWAY_MAX_REQUEST_BYTES", str(25 * 1024 * 1024)))
 
 UI_ORIGINS = [origin.strip() for origin in os.getenv("AI_UI_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware, allow_origins=UI_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    value = incoming_request_id(request)
+    token = set_request_id(value)
+    started = time.perf_counter()
+    try:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_BYTES:
+            return Response(content='{"detail":"request body too large"}', status_code=413, media_type="application/json", headers={"X-Request-ID": value})
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = value
+        logger.info("gateway_request request_id=%s method=%s path=%s status=%s gateway_ms=%.1f", value, request.method, request.url.path, response.status_code, elapsed_ms(started))
+        return response
+    except Exception:
+        logger.exception("gateway_request_failed request_id=%s method=%s path=%s gateway_ms=%.1f", value, request.method, request.url.path, elapsed_ms(started))
+        raise
+    finally:
+        reset_request_id(token)
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
@@ -50,6 +71,18 @@ def downstream_error(exc: Exception) -> HTTPException:
 @app.get("/health", tags=["internal"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.get("/ready", tags=["internal"])
+async def ready() -> dict[str, str]:
+    started = time.perf_counter()
+    try:
+        await session_store.conversation_exists("00000000-0000-0000-0000-000000000000", "__readiness__", "__readiness__")
+    except Exception as exc:
+        logger.warning("gateway_readiness_failed request_id=%s stage=postgres error=%s", request_id(), type(exc).__name__)
+        raise HTTPException(503, "postgres unavailable") from exc
+    logger.info("gateway_readiness request_id=%s postgres_ms=%.1f", request_id(), elapsed_ms(started))
+    return {"status": "ready"}
+
 
 @app.post("/api/v1/conversations", response_model=ConversationResponse)
 async def create_conversation(body: ConversationCreateRequest, request: Request) -> ConversationResponse:
@@ -155,10 +188,13 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
         raise HTTPException(status_code=404, detail="conversation not found")
     history = await session_store.get_history(conversation_id, tenant, user)
     messages, new_messages = _conversation_messages(body, history)
+    agent_started = time.perf_counter()
     try:
         result = await agent_client.answer(messages, body.model)
     except Exception as exc:
+        logger.warning("gateway_stage_failed request_id=%s stage=agent error=%s", request_id(), type(exc).__name__)
         raise downstream_error(exc) from exc
+    logger.info("gateway_agent_stage request_id=%s agent_ms=%.1f", request_id(), elapsed_ms(agent_started))
     for message in new_messages:
         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
     await session_store.append_message(conversation_id, tenant, user, "assistant", str(result.get("answer", "")))
@@ -208,8 +244,11 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
 @app.post("/search", operation_id="search_knowledge", tags=["llm"])
 async def search(request: SearchRequest, http_request: Request) -> list[dict]:
     tenant, user = authenticate(http_request)
+    started = time.perf_counter()
     try:
-        return await service.search(request.query, request.limit, tenant, user)
+        result = await service.search(request.query, request.limit, tenant, user)
+        logger.info("gateway_stage request_id=%s stage=retrieval retrieval_ms=%.1f", request_id(), elapsed_ms(started))
+        return result
     except Exception as exc:
         raise downstream_error(exc) from exc
 
