@@ -1,5 +1,5 @@
 name: tests
-# AI gateway application and MCP smoke validation
+# AI gateway application
 
 on:
   pull_request:
