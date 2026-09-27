@@ -47,8 +47,8 @@ def downstream_error(exc: Exception) -> HTTPException:
         return HTTPException(502, "downstream unavailable")
     return HTTPException(502, "downstream request failed")
 
-@app.get("/healthz", tags=["internal"])
-async def healthz() -> dict[str, str]:
+@app.get("/health", tags=["internal"])
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 @app.post("/api/v1/conversations", response_model=ConversationResponse)
