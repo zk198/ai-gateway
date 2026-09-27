@@ -131,3 +131,81 @@ def test_chat_completions_persists_history_and_calls_agent(monkeypatch):
         {"role": "user", "content": "again"},
         {"role": "assistant", "content": "second"},
     ]
+
+
+def test_grounded_answer_persists_citations_and_history(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
+
+    class FakeStore:
+        def __init__(self):
+            self.messages = []
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return conversation_id == "c1"
+        async def get_history(self, conversation_id, tenant, user):
+            return list(self.messages)
+        async def append_message(self, conversation_id, tenant, user, role, content):
+            self.messages.append({"role": role, "content": content})
+
+    store = FakeStore()
+
+    async def fake_answer(messages, model):
+        assert messages == [{"role": "user", "content": "What?"}]
+        return {
+            "answer": "Supported [S1].",
+            "citations": [{"id": "S1", "chunk_id": "c1", "source_name": "mailbox", "text": "Evidence"}],
+            "iterations": 2,
+            "tool_calls": 1,
+        }
+
+    monkeypatch.setattr(api, "session_store", store)
+    monkeypatch.setattr(api.agent_client, "answer", fake_answer)
+
+    response = TestClient(api.app).post("/api/v1/answer", json={"question": "What?"})
+    assert response.status_code == 200
+    assert response.json()["answer"] == "Supported [S1]."
+    assert response.json()["citations"][0]["source_name"] == "mailbox"
+    assert store.messages == [
+        {"role": "user", "content": "What?"},
+        {"role": "assistant", "content": "Supported [S1]."},
+    ]
+
+
+def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
+
+    class FakeStore:
+        def __init__(self):
+            self.messages = []
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return conversation_id == "c1"
+        async def get_history(self, conversation_id, tenant, user):
+            return list(self.messages)
+        async def append_message(self, conversation_id, tenant, user, role, content):
+            self.messages.append({"role": role, "content": content})
+
+    store = FakeStore()
+
+    async def fake_stream(messages, model):
+        yield "delta", '{"content":"Hello "}'
+        yield "delta", '{"content":"world."}'
+        yield "done", '{"citations":[{"id":"S1","chunk_id":"c1","source_name":"mailbox","text":"Evidence"}],"iterations":2,"tool_calls":1}'
+
+    monkeypatch.setattr(api, "session_store", store)
+    monkeypatch.setattr(api.agent_client, "stream_answer", fake_stream)
+
+    response = TestClient(api.app).post("/api/v1/answer/stream", json={"question": "What?"})
+    assert response.status_code == 200
+    assert "event: delta" in response.text
+    assert "Hello " in response.text
+    assert "event: done" in response.text
+    assert '"conversation_id": "c1"' in response.text
+    assert store.messages == [
+        {"role": "user", "content": "What?"},
+        {"role": "assistant", "content": "Hello world."},
+    ]
