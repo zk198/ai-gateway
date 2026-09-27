@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field\nfrom typing import Any
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
