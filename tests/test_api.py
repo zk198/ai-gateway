@@ -165,6 +165,7 @@ def test_grounded_answer_persists_citations_and_history(monkeypatch):
 
     response = TestClient(api.app).post("/api/v1/answer", json={"question": "What?"})
     assert response.status_code == 200
+    assert response.json()["conversation_id"] == "c1"
     assert response.json()["answer"] == "Supported [S1]."
     assert response.json()["citations"][0]["source_name"] == "mailbox"
     assert store.messages == [
