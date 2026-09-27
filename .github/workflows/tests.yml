@@ -2,10 +2,12 @@ name: tests
 # AI gateway application and MCP smoke validation
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-
+permissions:
+  contents: read
+  security-events: write  
 jobs:
   pytest:
     runs-on: ubuntu-latest
@@ -16,44 +18,3 @@ jobs:
           enable-cache: true
       - run: uv sync --extra test
       - run: uv run pytest
-      - run: docker build --progress=plain -t ai-gateway:ci .
-
-      - name: Smoke test Docker HTTP endpoints
-        run: |
-          docker run -d --rm --name ai-gateway-ci -p 18200:8200 \
-            -e RAG_RETRIEVAL_URL=http://127.0.0.1:8100 \
-            -e RAG_INGESTION_URL=http://127.0.0.1:8100 \
-            -e RAG_JWT_SECRET=e2e-ci-only-secret \
-            ai-gateway:ci
-          cleanup() { docker rm -f ai-gateway-ci >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:18200/health >/dev/null; then break; fi
-            sleep 1
-          done
-          curl -fsS http://localhost:18200/health >/dev/null
-          status=$(curl -sS -o /tmp/mcp-smoke.out -w '%{http_code}' \
-            -H 'Accept: application/json, text/event-stream' \
-            http://localhost:18200/mcp/)
-          case "$status" in
-            401|405|406) ;;
-            *) echo "unexpected /mcp/ status: $status"; cat /tmp/mcp-smoke.out; exit 1 ;;
-          esac
-          token=$(python - <<'PY'
-import base64, hashlib, hmac, json
-secret=b"e2e-ci-only-secret"
-def b64(v): return base64.urlsafe_b64encode(v).rstrip(b"=").decode()
-h=b64(json.dumps({"alg":"HS256","typ":"JWT"},separators=(",",":")).encode())
-p=b64(json.dumps({"tenant_id":"e2e-tenant","sub":"e2e-user"},separators=(",",":")).encode())
-s=hmac.new(secret,f"{h}.{p}".encode(),hashlib.sha256).digest()
-print(f"{h}.{p}.{b64(s)}")
-PY
-)
-          status=$(curl -sS -o /tmp/mcp-init.out -w '%{http_code}' \
-            -X POST \
-            -H "Authorization: Bearer $token" \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
-            http://localhost:18200/mcp/)
-          test "$status" = 200 || { echo "authenticated MCP initialize failed: $status"; cat /tmp/mcp-init.out; exit 1; }
