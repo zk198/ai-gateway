@@ -268,6 +268,37 @@ def test_grounded_answer_surfaces_downstream_failure(monkeypatch):
     assert response.json() == {"detail": "downstream timeout"}
 
 
+
+def test_grounded_answer_stream_serializes_uuid_conversation_id(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id=__import__("uuid").uuid4())
+
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return False
+
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+
+        async def append_message(self, conversation_id, tenant, user, role, content):
+            pass
+
+    async def fake_stream(messages, model):
+        yield "delta", '{"content":"Hello."}'
+        yield "done", '{"citations":[],"iterations":1,"tool_calls":0}'
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "stream_answer", fake_stream)
+
+    response = TestClient(api.app).post("/api/v1/answer/stream", json={"question": "What?"})
+
+    assert response.status_code == 200
+    assert '"conversation_id": "' in response.text
+    assert "UUID is not JSON serializable" not in response.text
+
 def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
     monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
 
