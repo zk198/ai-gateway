@@ -336,3 +336,16 @@ def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
         {"role": "user", "content": "What?"},
         {"role": "assistant", "content": "Hello world."},
     ]
+
+
+def test_request_id_is_propagated_and_returned():
+    from fastapi.testclient import TestClient
+    response = TestClient(api.app).get("/health", headers={"X-Request-ID": "phase1c-test-id"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "phase1c-test-id"
+
+
+def test_oversized_request_is_rejected(monkeypatch):
+    monkeypatch.setattr(api, "MAX_REQUEST_BYTES", 10)
+    response = TestClient(api.app).post("/search", content=b"12345678901")
+    assert response.status_code == 413
