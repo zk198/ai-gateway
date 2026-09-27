@@ -63,6 +63,7 @@ class Citation(BaseModel):
     text: str
 
 class AnswerResponse(BaseModel):
+    conversation_id: str
     answer: str
     citations: list[Citation]
     iterations: int
