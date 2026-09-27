@@ -160,6 +160,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
     await session_store.append_message(conversation_id, tenant, user, "assistant", str(result.get("answer", "")))
     return AnswerResponse(
+        conversation_id=conversation_id,
         answer=str(result.get("answer", "")),
         citations=[Citation(**item) for item in result.get("citations", [])],
         iterations=int(result.get("iterations", 0)),
@@ -176,7 +177,7 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
     elif not await session_store.conversation_exists(conversation_id, tenant, user):
         raise HTTPException(status_code=404, detail="conversation not found")
     history = await session_store.get_history(conversation_id, tenant, user)
-    _, messages, new_messages = _conversation_messages(body, history)
+    messages, new_messages = _conversation_messages(body, history)
 
     async def events():
         answer_parts: list[str] = []
