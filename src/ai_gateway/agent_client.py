@@ -20,3 +20,38 @@ class AgentClient:
             raise TimeoutError("agent-core timeout") from exc
         except httpx.RequestError as exc:
             raise ConnectionError("agent-core unavailable") from exc
+
+
+    async def answer(self, messages: list[dict], model: str | None = None) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/v1/answer",
+                    json={"messages": messages, "model": model},
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.TimeoutException as exc:
+            raise TimeoutError("agent-core timeout") from exc
+        except httpx.RequestError as exc:
+            raise ConnectionError("agent-core unavailable") from exc
+
+    async def stream_answer(self, messages: list[dict], model: str | None = None):
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/api/v1/answer/stream",
+                    json={"messages": messages, "model": model},
+                ) as response:
+                    response.raise_for_status()
+                    event = "message"
+                    async for line in response.aiter_lines():
+                        if line.startswith("event: "):
+                            event = line[7:]
+                        elif line.startswith("data: "):
+                            yield event, line[6:]
+        except httpx.TimeoutException as exc:
+            raise TimeoutError("agent-core timeout") from exc
+        except httpx.RequestError as exc:
+            raise ConnectionError("agent-core unavailable") from exc

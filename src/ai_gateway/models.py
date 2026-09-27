@@ -48,3 +48,23 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     conversation_id: str | None = None
     stream: bool = False
+
+
+class AnswerRequest(BaseModel):
+    model: str | None = None
+    messages: list[ChatMessage] | None = Field(default=None, min_length=1, max_length=100)
+    question: str | None = Field(default=None, min_length=1, max_length=20_000)
+    conversation_id: str | None = None
+
+class Citation(BaseModel):
+    id: str
+    chunk_id: str
+    source_name: str
+    text: str
+
+class AnswerResponse(BaseModel):
+    conversation_id: str
+    answer: str
+    citations: list[Citation]
+    iterations: int
+    tool_calls: int
