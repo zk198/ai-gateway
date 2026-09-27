@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -14,6 +15,8 @@ from .auth import authenticate
 from .db import SessionStore
 from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
 from .service import RAGService
+
+logger = logging.getLogger(__name__)
 
 settings = GatewaySettings(
     retrieval_url=os.getenv("RAG_RETRIEVAL_URL", "http://rag-retrieval:8100"),
