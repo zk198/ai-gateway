@@ -18,3 +18,30 @@ jobs:
           enable-cache: true
       - run: uv sync --extra test
       - run: uv run pytest
+      - name: Checkout UI for gateway-boundary assertion
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zk198/ai-ui
+          ref: fa438568511f70da2036480fb0bf7f064d630c49
+          path: ai-ui
+      - name: Verify browser routes use the gateway boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          roots = [Path("ai-ui/src")]
+          source = "\n".join(
+              p.read_text()
+              for root in roots
+              for p in root.rglob("*")
+              if p.suffix in {".ts", ".tsx"}
+          )
+          forbidden = [
+              "agent-core:8000",
+              "rag-retrieval:8100",
+              "pst-agent:8000",
+              "llm-gateway:8080",
+              "llm-inference:30000",
+          ]
+          assert not any(value in source for value in forbidden), "browser source references a backend service directly"
+          assert "VITE_API_BASE_URL" in source
+          PY
