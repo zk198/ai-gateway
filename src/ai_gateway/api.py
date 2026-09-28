@@ -71,6 +71,19 @@ def downstream_error(exc: Exception) -> HTTPException:
         return HTTPException(502, "downstream unavailable")
     return HTTPException(502, "downstream request failed")
 
+def store_downstream_trace(exc: Exception, tenant_id: str, user_id: str) -> None:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    trace = detail.get("trace") if isinstance(detail, dict) else None
+    if isinstance(trace, dict) and trace.get("trace_id"):
+        trace_store.put(trace, tenant_id=tenant_id, user_id=user_id)
+
 @app.get("/health", tags=["internal"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -142,6 +155,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request) -> dic
     try:
         result = await agent_client.chat(messages, body.model)
     except Exception as exc:
+        store_downstream_trace(exc, tenant, user)
         raise downstream_error(exc) from exc
 
     for message in new_messages:
@@ -195,6 +209,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
     try:
         result = await agent_client.answer(messages, body.model)
     except Exception as exc:
+        store_downstream_trace(exc, tenant, user)
         logger.warning("gateway_stage_failed request_id=%s stage=agent error=%s", request_id(), type(exc).__name__)
         raise downstream_error(exc) from exc
     logger.info("gateway_agent_stage request_id=%s agent_ms=%.1f", request_id(), elapsed_ms(agent_started))

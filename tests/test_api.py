@@ -299,8 +299,29 @@ def test_grounded_answer_maps_agent_mcp_failure_to_502(monkeypatch):
         async def get_history(self, conversation_id, tenant, user):
             return []
 
+    trace = {
+        "schema_version": "1.0",
+        "trace_id": "nonstream-mcp-failure",
+        "status": "failed",
+        "error": {"type": "MCPToolArgumentError", "message": "invalid arguments"},
+        "trace": [
+            {"id": "tool-1", "kind": "tool", "stage": "tool", "name": "web.echo", "status": "failed"}
+        ],
+        "logs": [],
+        "metrics": {},
+    }
     request = httpx.Request("POST", "http://agent-core/api/v1/answer")
-    response = httpx.Response(502, request=request)
+    response = httpx.Response(
+        502,
+        request=request,
+        json={
+            "detail": {
+                "message": "grounded answer dependency failed",
+                "trace_id": trace["trace_id"],
+                "trace": trace,
+            }
+        },
+    )
 
     async def failing_answer(messages, model):
         raise httpx.HTTPStatusError(
@@ -311,6 +332,7 @@ def test_grounded_answer_maps_agent_mcp_failure_to_502(monkeypatch):
 
     monkeypatch.setattr(api, "session_store", FakeStore())
     monkeypatch.setattr(api.agent_client, "answer", failing_answer)
+    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-1", "user-1"))
 
     result = TestClient(api.app).post(
         "/api/v1/answer",
@@ -319,6 +341,12 @@ def test_grounded_answer_maps_agent_mcp_failure_to_502(monkeypatch):
 
     assert result.status_code == 502
     assert result.json() == {"detail": "downstream request failed"}
+
+    diagnostic = TestClient(api.app).get("/api/v1/traces/nonstream-mcp-failure")
+    assert diagnostic.status_code == 200
+    assert diagnostic.json()["status"] == "failed"
+    assert diagnostic.json()["error"]["type"] == "MCPToolArgumentError"
+    assert diagnostic.json()["trace"][0]["status"] == "failed"
 
 
 def test_grounded_answer_stream_serializes_uuid_conversation_id(monkeypatch):
