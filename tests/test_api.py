@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 import httpx
 
@@ -368,3 +370,60 @@ def test_trace_endpoint_is_tenant_and_user_scoped(monkeypatch):
 
     monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-2", "user-1"))
     assert client.get("/api/v1/traces/trace-1").status_code == 404
+
+
+def test_grounded_answer_stream_persists_failed_trace_and_exposes_only_trace_id(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return conversation_id == "c1"
+
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+
+    trace = {
+        "schema_version": "1.0",
+        "trace_id": "failed-trace-1",
+        "status": "failed",
+        "error": {"type": "MCPToolArgumentError", "message": "invalid arguments"},
+        "trace": [
+            {"id": "tool-1", "kind": "tool", "stage": "tool", "name": "web.echo", "status": "failed"}
+        ],
+        "logs": [],
+        "metrics": {},
+    }
+
+    async def fake_stream(messages, model):
+        yield "delta", '{"content":"partial"}'
+        yield "error", json.dumps({
+            "detail": "grounded answer dependency failed",
+            "trace_id": trace["trace_id"],
+            "trace": trace,
+        })
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "stream_answer", fake_stream)
+    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-1", "user-1"))
+
+    response = TestClient(api.app).post("/api/v1/answer/stream", json={"question": "What?"})
+    assert response.status_code == 200
+
+    frames = [frame for frame in response.text.split("\n\n") if frame]
+    assert len(frames) == 2
+    assert frames[0] == 'event: delta\ndata: {"content": "partial"}'
+    assert frames[1].startswith("event: error\ndata: ")
+    error_payload = json.loads(frames[1].split("data: ", 1)[1])
+    assert error_payload == {
+        "detail": "grounded answer dependency failed",
+        "trace_id": "failed-trace-1",
+    }
+
+    diagnostic = TestClient(api.app).get("/api/v1/traces/failed-trace-1")
+    assert diagnostic.status_code == 200
+    assert diagnostic.json()["status"] == "failed"
+    assert diagnostic.json()["error"]["type"] == "MCPToolArgumentError"

@@ -235,6 +235,17 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                     content = str(payload.get("content", ""))
                     answer_parts.append(content)
                     yield f"event: delta\ndata: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
+                elif event == "error":
+                    trace = payload.get("trace")
+                    if isinstance(trace, dict):
+                        trace_store.put(trace, tenant_id=tenant, user_id=user)
+                        error_payload = {
+                            "detail": "grounded answer dependency failed",
+                            "trace_id": str(trace.get("trace_id", "")),
+                        }
+                    else:
+                        error_payload = {"detail": "grounded answer dependency failed"}
+                    yield f"event: error\ndata: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
                 elif event == "done":
                     answer_text = "".join(answer_parts)
                     for message in new_messages:
