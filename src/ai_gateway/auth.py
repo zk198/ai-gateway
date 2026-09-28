@@ -5,6 +5,8 @@ from contextvars import ContextVar
 from typing import Any
 
 import jwt
+
+from .observability import audit_event
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
 
@@ -19,10 +21,15 @@ def reset_mcp_authorization(token) -> None:
     _mcp_authorization.reset(token)
 
 
+def _reject(status: int, detail: str, reason: str) -> None:
+    audit_event("auth_failure", operation="authenticate", outcome="denied", reason=reason)
+    raise HTTPException(status, detail)
+
+
 def _claims(request: Request) -> dict[str, Any]:
     header = request.headers.get("Authorization") or _mcp_authorization.get() or ""
     if not header.startswith("Bearer ") or not header[7:].strip():
-        raise HTTPException(401, "Bearer token required")
+        _reject(401, "Bearer token required", "missing_bearer")
     token = header[7:].strip()
     secret = os.getenv("RAG_JWT_SECRET")
     jwks = os.getenv("RAG_JWKS_URL")
@@ -39,7 +46,11 @@ def _claims(request: Request) -> dict[str, Any]:
             claims = jwt.decode(token, key, algorithms=algorithms, issuer=issuer, audience=audience, options={"verify_iss": issuer is not None, "verify_aud": audience is not None})
         else:
             raise HTTPException(500, "JWT verifier is not configured")
+    except jwt.ExpiredSignatureError as exc:
+        audit_event("auth_failure", operation="authenticate", outcome="denied", reason="expired")
+        raise HTTPException(401, "invalid token") from exc
     except jwt.PyJWTError as exc:
+        audit_event("auth_failure", operation="authenticate", outcome="denied", reason="invalid")
         raise HTTPException(401, "invalid token") from exc
     return claims
 
@@ -49,7 +60,7 @@ def authenticate(request: Request) -> tuple[str, str]:
     tenant = claims.get("tenant_id") or claims.get("tid")
     user = claims.get("sub")
     if not tenant or not user:
-        raise HTTPException(403, "token must contain tenant_id and sub")
+        _reject(403, "token must contain tenant_id and sub", "missing_identity_claims")
     return str(tenant), str(user)
 
 
