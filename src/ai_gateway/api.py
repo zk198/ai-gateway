@@ -11,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 from .agent_client import AgentClient
-from .auth import authenticate
+from .auth import authenticate, authenticate_diagnostics
 from .db import SessionStore
 from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
 from .service import RAGService
+from .trace_store import TraceStore
 from .observability import elapsed_ms, incoming_request_id, request_id, reset_request_id, set_request_id
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -31,6 +32,7 @@ settings = GatewaySettings(
 service = RAGService(settings)
 agent_client = AgentClient(settings.agent_url, settings.agent_timeout_seconds)
 session_store = SessionStore(settings.postgres_dsn)
+trace_store = TraceStore(int(os.getenv("AI_TRACE_STORE_MAX_TRACES", "1000")))
 app = FastAPI(title="AI Gateway", version="0.3.0")
 MAX_REQUEST_BYTES = int(os.getenv("AI_GATEWAY_MAX_REQUEST_BYTES", str(25 * 1024 * 1024)))
 
@@ -199,12 +201,16 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
     for message in new_messages:
         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
     await session_store.append_message(conversation_id, tenant, user, "assistant", str(result.get("answer", "")))
+    trace = result.get("trace")
+    if isinstance(trace, dict):
+        trace_store.put(trace, tenant_id=tenant, user_id=user)
     return AnswerResponse(
         conversation_id=conversation_id,
         answer=str(result.get("answer", "")),
         citations=[Citation(**item) for item in result.get("citations", [])],
         iterations=int(result.get("iterations", 0)),
         tool_calls=int(result.get("tool_calls", 0)),
+        trace_id=str(trace.get("trace_id")) if isinstance(trace, dict) and trace.get("trace_id") else None,
     )
 
 
@@ -235,6 +241,11 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
                     await session_store.append_message(conversation_id, tenant, user, "assistant", answer_text)
                     payload["conversation_id"] = str(conversation_id)
+                    trace = payload.get("trace")
+                    if isinstance(trace, dict):
+                        trace_store.put(trace, tenant_id=tenant, user_id=user)
+                        payload = {key: value for key, value in payload.items() if key != "trace"}
+                        payload["trace_id"] = str(trace.get("trace_id", ""))
                     logger.info("gateway_stream_stage request_id=%s stage=agent agent_ms=%.1f", request_id(), elapsed_ms(stream_started))
                     yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -243,6 +254,15 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+
+
+@app.get("/api/v1/traces/{trace_id}", tags=["diagnostics"])
+async def get_trace(trace_id: str, request: Request) -> dict:
+    tenant, user = authenticate_diagnostics(request)
+    trace = trace_store.get(trace_id, tenant_id=tenant, user_id=user)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return trace
 
 @app.post("/search", operation_id="search_knowledge", tags=["llm"])
 async def search(request: SearchRequest, http_request: Request) -> list[dict]:

@@ -349,3 +349,22 @@ def test_oversized_request_is_rejected(monkeypatch):
     monkeypatch.setattr(api, "MAX_REQUEST_BYTES", 10)
     response = TestClient(api.app).post("/search", content=b"12345678901")
     assert response.status_code == 413
+
+
+def test_trace_endpoint_requires_diagnostics_permission(monkeypatch):
+    from fastapi import HTTPException
+    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: (_ for _ in ()).throw(HTTPException(403, "diagnostics:read permission required")))
+    response = TestClient(api.app).get("/api/v1/traces/trace-1")
+    assert response.status_code == 403
+
+
+def test_trace_endpoint_is_tenant_and_user_scoped(monkeypatch):
+    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-1", "user-1"))
+    api.trace_store.put({"trace_id": "trace-1", "status": "completed"}, tenant_id="tenant-1", user_id="user-1")
+    client = TestClient(api.app)
+    response = client.get("/api/v1/traces/trace-1")
+    assert response.status_code == 200
+    assert response.json()["trace_id"] == "trace-1"
+
+    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-2", "user-1"))
+    assert client.get("/api/v1/traces/trace-1").status_code == 404

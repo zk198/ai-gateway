@@ -83,3 +83,19 @@ def test_missing_subject_or_tenant_is_forbidden(monkeypatch):
         authenticate(request_with_token(token))
 
     assert exc.value.status_code == 403
+
+
+def test_diagnostics_permission_is_required(monkeypatch):
+    monkeypatch.setenv("RAG_JWT_SECRET", "secret")
+    token = jwt.encode({"sub": "u1", "tenant_id": "t1"}, "secret", algorithm="HS256")
+    with pytest.raises(HTTPException) as exc:
+        from ai_gateway.auth import authenticate_diagnostics
+        authenticate_diagnostics(request_with_token(token))
+    assert exc.value.status_code == 403
+
+
+def test_diagnostics_permission_is_accepted(monkeypatch):
+    monkeypatch.setenv("RAG_JWT_SECRET", "secret")
+    token = jwt.encode({"sub": "u1", "tenant_id": "t1", "permissions": ["diagnostics:read"]}, "secret", algorithm="HS256")
+    from ai_gateway.auth import authenticate_diagnostics
+    assert authenticate_diagnostics(request_with_token(token)) == ("t1", "u1")
