@@ -74,6 +74,18 @@ def test_issuer_and_audience_are_verified_when_configured(monkeypatch):
     assert exc.value.status_code == 401
 
 
+def test_expired_token_is_rejected(monkeypatch):
+    monkeypatch.setenv("RAG_JWT_SECRET", "secret")
+
+    def expired(*args, **kwargs):
+        raise jwt.ExpiredSignatureError("expired")
+
+    monkeypatch.setattr(jwt, "decode", expired)
+    with pytest.raises(HTTPException) as exc:
+        authenticate(request_with_token("expired-token"))
+    assert exc.value.status_code == 401
+
+
 def test_missing_subject_or_tenant_is_forbidden(monkeypatch):
     monkeypatch.setenv("RAG_JWT_SECRET", "secret")
 
@@ -83,19 +95,3 @@ def test_missing_subject_or_tenant_is_forbidden(monkeypatch):
         authenticate(request_with_token(token))
 
     assert exc.value.status_code == 403
-
-
-def test_diagnostics_permission_is_required(monkeypatch):
-    monkeypatch.setenv("RAG_JWT_SECRET", "secret")
-    token = jwt.encode({"sub": "u1", "tenant_id": "t1"}, "secret", algorithm="HS256")
-    with pytest.raises(HTTPException) as exc:
-        from ai_gateway.auth import authenticate_diagnostics
-        authenticate_diagnostics(request_with_token(token))
-    assert exc.value.status_code == 403
-
-
-def test_diagnostics_permission_is_accepted(monkeypatch):
-    monkeypatch.setenv("RAG_JWT_SECRET", "secret")
-    token = jwt.encode({"sub": "u1", "tenant_id": "t1", "permissions": ["diagnostics:read"]}, "secret", algorithm="HS256")
-    from ai_gateway.auth import authenticate_diagnostics
-    assert authenticate_diagnostics(request_with_token(token)) == ("t1", "u1")

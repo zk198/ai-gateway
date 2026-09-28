@@ -520,3 +520,142 @@ def test_grounded_answer_stream_persists_failed_trace_and_exposes_only_trace_id(
     assert diagnostic.status_code == 200
     assert diagnostic.json()["status"] == "failed"
     assert diagnostic.json()["error"]["type"] == "MCPToolArgumentError"
+
+
+def test_search_maps_rag_unavailable_to_502(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("t1", "u1"))
+
+    async def failing_search(query, limit, tenant, user):
+        raise ConnectionError("retrieval unavailable")
+
+    monkeypatch.setattr(api.service, "search", failing_search)
+    response = TestClient(api.app).post("/search", json={"query": "hello"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "downstream unavailable"}
+
+
+def test_answer_maps_agent_unavailable_to_502(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("t1", "u1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return True
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+
+    async def failing_answer(messages, model):
+        raise ConnectionError("agent unavailable")
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "answer", failing_answer)
+    response = TestClient(api.app).post("/api/v1/answer", json={"question": "hello"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "downstream unavailable"}
+
+
+def test_answer_rejects_malformed_agent_response(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("t1", "u1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return True
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+
+    async def malformed_answer(messages, model):
+        return {"answer": "bad", "citations": [{"source_name": "missing-required-fields"}]}
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "answer", malformed_answer)
+    response = TestClient(api.app).post("/api/v1/answer", json={"question": "hello"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "malformed agent response"}
+
+
+def test_streaming_interruption_returns_error_event(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("t1", "u1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return True
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+        async def append_message(self, *args):
+            pass
+
+    async def interrupted_stream(messages, model):
+        yield "delta", '{"content":"partial"}'
+        raise ConnectionError("stream interrupted")
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "stream_answer", interrupted_stream)
+    response = TestClient(api.app).post("/api/v1/answer/stream", json={"question": "hello"})
+    assert response.status_code == 200
+    assert "event: delta" in response.text
+    assert "event: error" in response.text
+
+
+def test_ops_status_requires_auth(monkeypatch):
+    from fastapi import HTTPException
+
+    def reject(request):
+        raise HTTPException(status_code=401, detail="missing token")
+
+    monkeypatch.setattr(api, "authenticate", reject)
+    assert TestClient(api.app).get("/api/v1/ops/status").status_code == 401
+
+
+def test_ops_status_reports_dependency_state(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("t1", "u1"))
+
+    class FakeStore:
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return False
+
+    class FakeResponse:
+        def __init__(self, status_code=200):
+            self.status_code = status_code
+        @property
+        def is_success(self):
+            return 200 <= self.status_code < 300
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def get(self, url):
+            return FakeResponse(200)
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    response = TestClient(api.app).get("/api/v1/ops/status")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "ok"
+    assert set(body["dependencies"]) == {"postgres", "agent", "retrieval", "ingestion"}
+    assert all(item["status"] == "ok" for item in body["dependencies"].values())
+
+
+def test_cors_allows_ui_headers_but_not_arbitrary_methods():
+    client = TestClient(api.app)
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,x-request-id",
+        },
+    )
+    assert response.status_code == 200
+    assert "POST" in response.headers["access-control-allow-methods"]
+    assert "PUT" not in response.headers["access-control-allow-methods"]

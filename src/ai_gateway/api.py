@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
 import uuid
+
+import httpx
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +19,7 @@ from .db import SessionStore
 from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
 from .service import RAGService
 from .trace_store import TraceStore
-from .observability import elapsed_ms, incoming_request_id, request_id, reset_request_id, set_request_id
+from .observability import audit_event, elapsed_ms, incoming_request_id, request_id, reset_request_id, set_request_id
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
@@ -38,7 +41,7 @@ MAX_REQUEST_BYTES = int(os.getenv("AI_GATEWAY_MAX_REQUEST_BYTES", str(25 * 1024 
 
 UI_ORIGINS = [origin.strip() for origin in os.getenv("AI_UI_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 app.add_middleware(
-    CORSMiddleware, allow_origins=UI_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=UI_ORIGINS, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"]
 )
 
 @app.middleware("http")
@@ -87,6 +90,41 @@ def store_downstream_trace(exc: Exception, tenant_id: str, user_id: str) -> None
 @app.get("/health", tags=["internal"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/v1/ops/status")
+async def ops_status(request: Request) -> dict[str, object]:
+    authenticate(request)
+    timeout = float(os.getenv("AI_GATEWAY_OPS_PROBE_TIMEOUT_SECONDS", "2"))
+
+    async def probe(name: str, url: str) -> tuple[str, dict[str, object]]:
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(url)
+            return name, {"status": "ok" if response.is_success else "error", "latency_ms": elapsed_ms(started), "http_status": response.status_code}
+        except httpx.TimeoutException:
+            return name, {"status": "timeout", "latency_ms": elapsed_ms(started)}
+        except httpx.RequestError:
+            return name, {"status": "unavailable", "latency_ms": elapsed_ms(started)}
+
+    async def postgres_probe() -> tuple[str, dict[str, object]]:
+        started = time.perf_counter()
+        try:
+            await session_store.conversation_exists("00000000-0000-0000-0000-000000000000", "__ops__", "__ops__")
+            return "postgres", {"status": "ok", "latency_ms": elapsed_ms(started)}
+        except Exception:
+            return "postgres", {"status": "unavailable", "latency_ms": elapsed_ms(started)}
+
+    checks = await asyncio.gather(
+        postgres_probe(),
+        probe("agent", f"{settings.agent_url.rstrip('/')}/api/v1/ready"),
+        probe("retrieval", f"{settings.retrieval_url.rstrip('/')}/health"),
+        probe("ingestion", f"{settings.ingestion_url.rstrip('/')}/health"),
+    )
+    dependencies = dict(checks)
+    overall = "ok" if all(item["status"] == "ok" for item in dependencies.values()) else "degraded"
+    return {"status": overall, "request_id": request_id(), "dependencies": dependencies}
 
 @app.get("/ready", tags=["internal"])
 async def ready() -> dict[str, str]:
@@ -207,15 +245,26 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
     messages, new_messages = _conversation_messages(body, history)
     agent_started = time.perf_counter()
     try:
+        audit_event("agent_invocation", operation="answer", outcome="started", downstream="agent-core")
         result = await agent_client.answer(messages, body.model)
     except Exception as exc:
+        audit_event("agent_invocation", operation="answer", outcome="failed", downstream="agent-core", error=type(exc).__name__)
         store_downstream_trace(exc, tenant, user)
         logger.warning("gateway_stage_failed request_id=%s stage=agent error=%s", request_id(), type(exc).__name__)
         raise downstream_error(exc) from exc
+    audit_event("agent_invocation", operation="answer", outcome="succeeded", downstream="agent-core")
     logger.info("gateway_agent_stage request_id=%s agent_ms=%.1f", request_id(), elapsed_ms(agent_started))
+    try:
+        citations = [Citation(**item) for item in result.get("citations", [])]
+        answer_text = str(result.get("answer", ""))
+        iterations = int(result.get("iterations", 0))
+        tool_calls = int(result.get("tool_calls", 0))
+    except (TypeError, ValueError, KeyError) as exc:
+        audit_event("downstream_response", operation="answer", outcome="malformed", downstream="agent-core", error=type(exc).__name__)
+        raise HTTPException(status_code=502, detail="malformed agent response") from exc
     for message in new_messages:
         await session_store.append_message(conversation_id, tenant, user, message["role"], message["content"])
-    await session_store.append_message(conversation_id, tenant, user, "assistant", str(result.get("answer", "")))
+    await session_store.append_message(conversation_id, tenant, user, "assistant", answer_text)
     trace = result.get("trace")
     if isinstance(trace, dict):
         trace_store.put(trace, tenant_id=tenant, user_id=user)
@@ -272,9 +321,11 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                         trace_store.put(trace, tenant_id=tenant, user_id=user)
                         payload = {key: value for key, value in payload.items() if key != "trace"}
                         payload["trace_id"] = str(trace.get("trace_id", ""))
+                    audit_event("agent_invocation", operation="answer_stream", outcome="succeeded", downstream="agent-core")
                     logger.info("gateway_stream_stage request_id=%s stage=agent agent_ms=%.1f", request_id(), elapsed_ms(stream_started))
                     yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
+            audit_event("agent_invocation", operation="answer_stream", outcome="failed", downstream="agent-core", error=type(exc).__name__)
             logger.exception("grounded_answer_stream_failed request_id=%s stage=agent error=%s", request_id(), type(exc).__name__)
             yield f"event: error\ndata: {json.dumps({'detail': 'grounded answer dependency failed'})}\n\n"
 
