@@ -77,18 +77,28 @@ def test_chat_completions_persists_history_and_calls_agent(monkeypatch):
     class FakeStore:
         def __init__(self):
             self.messages = []
+
         async def create_conversation(self, tenant, user, title):
             from types import SimpleNamespace
             from datetime import datetime, timezone
-            return SimpleNamespace(id="c1", title=title, created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+            return SimpleNamespace(
+                id="c1",
+                title=title,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+
         async def conversation_exists(self, conversation_id, tenant, user):
             return conversation_id == "c1"
+
         async def get_history(self, conversation_id, tenant, user):
             return list(self.messages)
+
         async def append_message(self, conversation_id, tenant, user, role, content):
             self.messages.append({"role": role, "content": content})
 
     store = FakeStore()
+
     async def fake_chat(messages, model):
         assert messages == [{"role": "user", "content": "hello"}]
         return {"content": "world", "iterations": 1, "tool_calls": 0}
@@ -96,7 +106,6 @@ def test_chat_completions_persists_history_and_calls_agent(monkeypatch):
     monkeypatch.setattr(gateway_api, "session_store", store)
     monkeypatch.setattr(gateway_api.agent_client, "chat", fake_chat)
 
-    from fastapi.testclient import TestClient
     response = TestClient(gateway_api.app).post(
         "/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "hello"}]},
@@ -141,13 +150,17 @@ def test_grounded_answer_persists_citations_and_history(monkeypatch):
     class FakeStore:
         def __init__(self):
             self.messages = []
+
         async def create_conversation(self, tenant, user, title):
             from types import SimpleNamespace
             return SimpleNamespace(id="c1")
+
         async def conversation_exists(self, conversation_id, tenant, user):
             return conversation_id == "c1"
+
         async def get_history(self, conversation_id, tenant, user):
             return list(self.messages)
+
         async def append_message(self, conversation_id, tenant, user, role, content):
             self.messages.append({"role": role, "content": content})
 
@@ -157,7 +170,9 @@ def test_grounded_answer_persists_citations_and_history(monkeypatch):
         assert messages == [{"role": "user", "content": "What?"}]
         return {
             "answer": "Supported [S1].",
-            "citations": [{"id": "S1", "chunk_id": "c1", "source_name": "mailbox", "text": "Evidence"}],
+            "citations": [
+                {"id": "S1", "chunk_id": "c1", "source_name": "mailbox", "text": "Evidence"}
+            ],
             "iterations": 2,
             "tool_calls": 1,
         }
@@ -270,6 +285,41 @@ def test_grounded_answer_surfaces_downstream_failure(monkeypatch):
     assert response.json() == {"detail": "downstream timeout"}
 
 
+def test_grounded_answer_maps_agent_mcp_failure_to_502(monkeypatch):
+    monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
+
+    class FakeStore:
+        async def create_conversation(self, tenant, user, title):
+            from types import SimpleNamespace
+            return SimpleNamespace(id="c1")
+
+        async def conversation_exists(self, conversation_id, tenant, user):
+            return conversation_id == "c1"
+
+        async def get_history(self, conversation_id, tenant, user):
+            return []
+
+    request = httpx.Request("POST", "http://agent-core/api/v1/answer")
+    response = httpx.Response(502, request=request)
+
+    async def failing_answer(messages, model):
+        raise httpx.HTTPStatusError(
+            "agent-core returned MCP failure",
+            request=request,
+            response=response,
+        )
+
+    monkeypatch.setattr(api, "session_store", FakeStore())
+    monkeypatch.setattr(api.agent_client, "answer", failing_answer)
+
+    result = TestClient(api.app).post(
+        "/api/v1/answer",
+        json={"question": "What?"},
+    )
+
+    assert result.status_code == 502
+    assert result.json() == {"detail": "downstream request failed"}
+
 
 def test_grounded_answer_stream_serializes_uuid_conversation_id(monkeypatch):
     monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
@@ -301,19 +351,24 @@ def test_grounded_answer_stream_serializes_uuid_conversation_id(monkeypatch):
     assert '"conversation_id": "' in response.text
     assert "UUID is not JSON serializable" not in response.text
 
+
 def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
     monkeypatch.setattr(api, "authenticate", lambda request: ("tenant-1", "user-1"))
 
     class FakeStore:
         def __init__(self):
             self.messages = []
+
         async def create_conversation(self, tenant, user, title):
             from types import SimpleNamespace
             return SimpleNamespace(id="c1")
+
         async def conversation_exists(self, conversation_id, tenant, user):
             return conversation_id == "c1"
+
         async def get_history(self, conversation_id, tenant, user):
             return list(self.messages)
+
         async def append_message(self, conversation_id, tenant, user, role, content):
             self.messages.append({"role": role, "content": content})
 
@@ -341,7 +396,6 @@ def test_grounded_answer_stream_persists_completed_answer(monkeypatch):
 
 
 def test_request_id_is_propagated_and_returned():
-    from fastapi.testclient import TestClient
     response = TestClient(api.app).get("/health", headers={"X-Request-ID": "phase1c-test-id"})
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "phase1c-test-id"
@@ -355,14 +409,25 @@ def test_oversized_request_is_rejected(monkeypatch):
 
 def test_trace_endpoint_requires_diagnostics_permission(monkeypatch):
     from fastapi import HTTPException
-    monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: (_ for _ in ()).throw(HTTPException(403, "diagnostics:read permission required")))
+
+    monkeypatch.setattr(
+        api,
+        "authenticate_diagnostics",
+        lambda request: (_ for _ in ()).throw(
+            HTTPException(403, "diagnostics:read permission required")
+        ),
+    )
     response = TestClient(api.app).get("/api/v1/traces/trace-1")
     assert response.status_code == 403
 
 
 def test_trace_endpoint_is_tenant_and_user_scoped(monkeypatch):
     monkeypatch.setattr(api, "authenticate_diagnostics", lambda request: ("tenant-1", "user-1"))
-    api.trace_store.put({"trace_id": "trace-1", "status": "completed"}, tenant_id="tenant-1", user_id="user-1")
+    api.trace_store.put(
+        {"trace_id": "trace-1", "status": "completed"},
+        tenant_id="tenant-1",
+        user_id="user-1",
+    )
     client = TestClient(api.app)
     response = client.get("/api/v1/traces/trace-1")
     assert response.status_code == 200
