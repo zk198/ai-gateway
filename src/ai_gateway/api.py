@@ -245,7 +245,7 @@ async def answer_stream(body: AnswerRequest, request: Request) -> StreamingRespo
                         }
                     else:
                         error_payload = {"detail": "grounded answer dependency failed"}
-                    yield f"event: error\\ndata: {json.dumps(error_payload, ensure_ascii=False)}\\n\\n"
+                    yield f"event: error\ndata: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
                 elif event == "done":
                     answer_text = "".join(answer_parts)
                     for message in new_messages:
