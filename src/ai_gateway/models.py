@@ -35,7 +35,7 @@ class GatewaySettings(BaseModel):
     timeout_seconds: float = 60.0
     agent_timeout_seconds: float = 120.0
     laya_enabled: bool = False
-    laya_url: str = "http://laya:8000"
+    laya_url: str
     laya_timeout_seconds: float = 5.0
     laya_api_key: str | None = None
 
