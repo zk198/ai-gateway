@@ -27,14 +27,14 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 settings = GatewaySettings(
-    retrieval_url=os.getenv("RAG_RETRIEVAL_URL", "http://rag-retrieval:8100"),
-    ingestion_url=os.getenv("RAG_INGESTION_URL", "http://pst-agent:8000"),
-    agent_url=os.getenv("AI_AGENT_URL", "http://agent-core:8000"),
-    postgres_dsn=os.getenv("AI_POSTGRES_DSN", os.getenv("RAG_POSTGRES_DSN", "postgresql://rag:rag@postgres:5432/rag")),
+    retrieval_url=os.environ["RAG_RETRIEVAL_URL"],
+    ingestion_url=os.environ["RAG_INGESTION_URL"],
+    agent_url=os.environ["AI_AGENT_URL"],
+    postgres_dsn=os.environ["AI_POSTGRES_DSN"],
     timeout_seconds=float(os.getenv("RAG_DOWNSTREAM_TIMEOUT_SECONDS", "60")),
     agent_timeout_seconds=float(os.getenv("AI_AGENT_TIMEOUT_SECONDS", "120")),
     laya_enabled=os.getenv("LAYA_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
-    laya_url=os.getenv("LAYA_URL", "http://laya:8000"),
+    laya_url=os.environ["LAYA_URL"],
     laya_timeout_seconds=float(os.getenv("LAYA_TIMEOUT_SECONDS", "5")),
     laya_api_key=os.getenv("LAYA_API_KEY") or None,
 )
