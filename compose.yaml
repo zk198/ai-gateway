@@ -7,6 +7,10 @@ services:
       AI_AGENT_URL: http://agent-core:8000
       AI_POSTGRES_DSN: postgresql://rag:rag@postgres:5432/rag
       RAG_JWT_SECRET: ${RAG_JWT_SECRET:?set RAG_JWT_SECRET}
+      LAYA_ENABLED: ${LAYA_ENABLED:-false}
+      LAYA_URL: ${LAYA_URL:-http://laya:8000}
+      LAYA_TIMEOUT_SECONDS: ${LAYA_TIMEOUT_SECONDS:-5}
+      LAYA_API_KEY: ${LAYA_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

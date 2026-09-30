@@ -150,10 +150,13 @@ def test_grounded_answer_persists_citations_and_history(monkeypatch):
     class FakeStore:
         def __init__(self):
             self.messages = []
+            self.conversation_id = None
 
         async def create_conversation(self, tenant, user, title):
             from types import SimpleNamespace
-            return SimpleNamespace(id="c1")
+            from uuid import uuid4
+            self.conversation_id = uuid4()
+            return SimpleNamespace(id=self.conversation_id)
 
         async def conversation_exists(self, conversation_id, tenant, user):
             return conversation_id == "c1"
@@ -182,7 +185,7 @@ def test_grounded_answer_persists_citations_and_history(monkeypatch):
 
     response = TestClient(api.app).post("/api/v1/answer", json={"question": "What?"})
     assert response.status_code == 200
-    assert response.json()["conversation_id"] == "c1"
+    assert response.json()["conversation_id"] == str(store.conversation_id)
     assert response.json()["answer"] == "Supported [S1]."
     assert response.json()["citations"][0]["source_name"] == "mailbox"
     assert store.messages == [
