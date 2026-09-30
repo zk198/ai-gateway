@@ -333,7 +333,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerResponse:
     if isinstance(trace, dict):
         trace_store.put(trace, tenant_id=tenant, user_id=user)
     return AnswerResponse(
-        conversation_id=conversation_id,
+        conversation_id=str(conversation_id),
         answer=str(result.get("answer", "")),
         citations=[Citation(**item) for item in result.get("citations", [])],
         iterations=int(result.get("iterations", 0)),
