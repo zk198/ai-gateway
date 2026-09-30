@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import json
 import logging
 import os
@@ -106,7 +107,7 @@ async def systemone(request: Request, body: dict) -> dict:
     protected by the existing diagnostics capability and remains disabled unless
     LAYA_ENABLED is true.
     """
-    authenticate_diagnostics(request)
+    tenant, user = authenticate_diagnostics(request)
     if not settings.laya_enabled:
         raise HTTPException(status_code=503, detail="Laya disabled")
     state = body.get("state")
@@ -125,8 +126,8 @@ async def systemone(request: Request, body: dict) -> dict:
         "schema_version": "1.0",
         "trace_id": trace_id,
         "request_id": request_id(),
-        "started_at": "",
-        "completed_at": "",
+        "started_at": datetime.now(UTC).isoformat(),
+        "completed_at": datetime.now(UTC).isoformat(),
         "duration_ms": latency,
         "status": "completed",
         "error": None,
@@ -140,8 +141,8 @@ async def systemone(request: Request, body: dict) -> dict:
             "stage": "laya",
             "name": "laya.systemone",
             "status": "completed",
-            "started_at": "",
-            "completed_at": "",
+            "started_at": datetime.now(UTC).isoformat(),
+            "completed_at": datetime.now(UTC).isoformat(),
             "duration_ms": latency,
             "payload": {
                 "routing": result.get("routing"),
@@ -150,7 +151,7 @@ async def systemone(request: Request, body: dict) -> dict:
             },
         }],
     }
-    trace_store.put(trace, tenant_id=authenticate_diagnostics(request)[0], user_id=authenticate_diagnostics(request)[1])
+    trace_store.put(trace, tenant_id=tenant, user_id=user)
     audit_event("laya_decision", operation="systemone", outcome="succeeded", latency_ms=latency)
     return {"answers": result.get("answers", {}), "routing": result.get("routing"), "trace_id": trace_id}
 
