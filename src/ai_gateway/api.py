@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 from .agent_client import AgentClient
+from .laya_client import LayaClient
 from .auth import authenticate, authenticate_diagnostics
 from .db import SessionStore
 from .models import AnswerRequest, AnswerResponse, ChatCompletionRequest, Citation, ConversationCreateRequest, ConversationResponse, GatewaySettings, SearchRequest
@@ -31,9 +32,14 @@ settings = GatewaySettings(
     postgres_dsn=os.getenv("AI_POSTGRES_DSN", os.getenv("RAG_POSTGRES_DSN", "postgresql://rag:rag@postgres:5432/rag")),
     timeout_seconds=float(os.getenv("RAG_DOWNSTREAM_TIMEOUT_SECONDS", "60")),
     agent_timeout_seconds=float(os.getenv("AI_AGENT_TIMEOUT_SECONDS", "120")),
+    laya_enabled=os.getenv("LAYA_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+    laya_url=os.getenv("LAYA_URL", "http://laya:8000"),
+    laya_timeout_seconds=float(os.getenv("LAYA_TIMEOUT_SECONDS", "5")),
+    laya_api_key=os.getenv("LAYA_API_KEY") or None,
 )
 service = RAGService(settings)
 agent_client = AgentClient(settings.agent_url, settings.agent_timeout_seconds)
+laya_client = LayaClient(settings.laya_url, settings.laya_timeout_seconds, settings.laya_api_key)
 session_store = SessionStore(settings.postgres_dsn)
 trace_store = TraceStore(int(os.getenv("AI_TRACE_STORE_MAX_TRACES", "1000")))
 app = FastAPI(title="AI Gateway", version="0.3.0")
@@ -90,6 +96,63 @@ def store_downstream_trace(exc: Exception, tenant_id: str, user_id: str) -> None
 @app.get("/health", tags=["internal"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/v1/systemone", tags=["diagnostics"])
+async def systemone(request: Request, body: dict) -> dict:
+    """Privileged gateway boundary for direct System-1 decisions.
+
+    Browser code never connects to Laya directly. This endpoint is intentionally
+    protected by the existing diagnostics capability and remains disabled unless
+    LAYA_ENABLED is true.
+    """
+    authenticate_diagnostics(request)
+    if not settings.laya_enabled:
+        raise HTTPException(status_code=503, detail="Laya disabled")
+    state = body.get("state")
+    questions = body.get("questions")
+    if state is None or not isinstance(questions, dict) or not questions:
+        raise HTTPException(status_code=422, detail="state and non-empty questions are required")
+    started = time.perf_counter()
+    try:
+        result = await laya_client.decide(state, questions, model=body.get("model"))
+    except Exception as exc:
+        audit_event("laya_decision", operation="systemone", outcome="failed", error=type(exc).__name__)
+        raise downstream_error(exc) from exc
+    latency = elapsed_ms(started)
+    trace_id = uuid.uuid4().hex
+    trace = {
+        "schema_version": "1.0",
+        "trace_id": trace_id,
+        "request_id": request_id(),
+        "started_at": "",
+        "completed_at": "",
+        "duration_ms": latency,
+        "status": "completed",
+        "error": None,
+        "logs": [],
+        "metrics": {"trace_events": 1, "laya_ms": latency},
+        "trace": [{
+            "event_id": uuid.uuid4().hex,
+            "parent_id": None,
+            "sequence": 1,
+            "kind": "system1",
+            "stage": "laya",
+            "name": "laya.systemone",
+            "status": "completed",
+            "started_at": "",
+            "completed_at": "",
+            "duration_ms": latency,
+            "payload": {
+                "routing": result.get("routing"),
+                "answers": result.get("answers"),
+                "request_id": request_id(),
+            },
+        }],
+    }
+    trace_store.put(trace, tenant_id=authenticate_diagnostics(request)[0], user_id=authenticate_diagnostics(request)[1])
+    audit_event("laya_decision", operation="systemone", outcome="succeeded", latency_ms=latency)
+    return {"answers": result.get("answers", {}), "routing": result.get("routing"), "trace_id": trace_id}
 
 
 @app.get("/api/v1/ops/status")
